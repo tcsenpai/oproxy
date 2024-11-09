@@ -8,6 +8,7 @@ import logging
 from proxy.logger import setup_logging
 from proxy.tcp_handler import TCPHandler
 from proxy.udp_handler import UDPHandler
+from proxy.metrics import ConnectionMetrics, MetricsReporter
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Transparent TCP/UDP Proxy with logging capabilities')
@@ -33,8 +34,13 @@ def main():
     args = parse_args()
     setup_logging(args.log_file, getattr(logging, args.log_level))
 
+    # Initialize metrics
+    metrics = ConnectionMetrics()
+    metrics_reporter = MetricsReporter(metrics, interval=60)
+    metrics_reporter.start()
+
     # Initialize TCP handler
-    tcp_handler = TCPHandler(TARGET_HOST, TARGET_PORT)
+    tcp_handler = TCPHandler(TARGET_HOST, TARGET_PORT, metrics)
     
     # Setup TCP server
     tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

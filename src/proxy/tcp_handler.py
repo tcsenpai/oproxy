@@ -1,14 +1,18 @@
 import socket
 import threading
 import logging
+import select
 from datetime import datetime
 from typing import Tuple, Optional
+from .metrics import ConnectionMetrics
 
 class TCPHandler:
-    def __init__(self, target_host: str, target_port: int):
+    def __init__(self, target_host: str, target_port: int, metrics: ConnectionMetrics):
         self.target_host = target_host
         self.target_port = target_port
-
+        self.metrics = metrics
+        self.buffer_size = 65536  # Increased buffer size for better performance
+        
     def log_data_content(self, data: bytes, src: tuple, dst: tuple, direction: str, full_debug: bool = False) -> None:
         try:
             # Always log basic info
@@ -48,22 +52,31 @@ class TCPHandler:
                 direction: str, log_data: bool, full_debug: bool = False) -> None:
         total_bytes = 0
         try:
+            # Set socket options for performance
+            source.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.buffer_size)
+            destination.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.buffer_size)
+            
+            # Use select for non-blocking I/O
             while True:
-                data = source.recv(4096)
-                if not data:
-                    break
-                total_bytes += len(data)
-                destination.send(data)
-                
-                if log_data:
-                    src = source.getpeername()
-                    dst = destination.getpeername()
-                    self.log_data_content(data, src, dst, direction, full_debug)
-
+                ready = select.select([source], [], [], 1.0)
+                if ready[0]:
+                    data = source.recv(self.buffer_size)
+                    if not data:
+                        break
+                    total_bytes += len(data)
+                    destination.send(data)
+                    self.metrics.add_bytes(len(data))
+                    
+                    if log_data:
+                        src = source.getpeername()
+                        dst = destination.getpeername()
+                        self.log_data_content(data, src, dst, direction, full_debug)
+                        
         except Exception as e:
             logging.error(f"Error in {direction}: {str(e)}")
         finally:
             logging.info(f"Connection closed ({direction}). Total bytes transferred: {total_bytes}")
+            self.metrics.decrement_active()
             try:
                 source.close()
                 destination.close()
